@@ -3,7 +3,7 @@ import { ImageUp, Loader2, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { clearDemoData, saveSettings } from 'zitejs/api';
+import { clearDemoData, saveSettings, seedWorkspace } from 'zitejs/api';
 import { uploadFile } from 'zitejs/upload';
 import { formatMoney } from '@project/shared/forms/logic';
 import { Button } from '@project/components/ui/button';
@@ -110,7 +110,7 @@ function LogoField() {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** The way out of the demo: everything the seed made goes, anything created since stays. */
+/** The way out of the demo: everything the seed made goes, anything created before or since stays. */
 function DemoDataSection({ demo }: { demo: NonNullable<Bootstrap['demo']> }) {
   const qc = useQueryClient();
   const app = useAppActions();
@@ -143,7 +143,7 @@ function DemoDataSection({ demo }: { demo: NonNullable<Bootstrap['demo']> }) {
   };
 
   return (
-    <SettingsSection title="Demo data" description="This workspace opened with a sample foundation so every screen had something in it. Remove it when you’re ready to run your own programs.">
+    <SettingsSection title="Demo data" description="The sample foundation loaded from this page. Remove it when you’re ready to run your own programs.">
       <SettingsCard>
         <SettingsRow label="Riverbend Community Foundation" description={`${parts.join(' · ')}`}>
           <Button type="button" size="sm" variant="outline" className="text-tone-danger hover:text-tone-danger" disabled={busy} onClick={() => void run()}>
@@ -152,6 +152,46 @@ function DemoDataSection({ demo }: { demo: NonNullable<Bootstrap['demo']> }) {
         </SettingsRow>
       </SettingsCard>
     </SettingsSection>
+  );
+}
+
+/**
+ * Loading the sample by hand. Only offered to admins while no sample is loaded
+ * and the workspace has no programs or submissions; the server enforces the same rule.
+ */
+function SampleDataSection() {
+  const qc = useQueryClient();
+  const app = useAppActions();
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    const ok = await app.confirm({
+      title: 'Load sample data?',
+      description: 'This adds Riverbend Community Foundation, a fictional funder with five programs, 68 submissions, and the reviews, messages, payments and teammates that go with them. Organization details you haven’t set yet take the sample’s. You can remove all of it later from this page.',
+      confirmLabel: 'Load sample data',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await seedWorkspace({});
+      await qc.invalidateQueries();
+      toast.success('Sample data loaded', { description: `${res.submissions} submissions across ${res.programs} programs.` });
+    } catch (e) {
+      toast.error(errorMessage(e, "Couldn't load the sample data"));
+      void qc.invalidateQueries();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-12 border-t pt-5">
+      <h3 className="text-[13px] font-medium">Sample data</h3>
+      <p className="mt-0.5 text-[13px] text-muted-foreground">Fill this empty workspace with a fictional foundation to see how programs, reviews and awards fit together.</p>
+      <Button type="button" size="sm" variant="outline" className="mt-3" disabled={busy} onClick={() => void run()}>
+        {busy && <Loader2 className="animate-spin" />} {busy ? 'Loading sample data…' : 'Load sample data…'}
+      </Button>
+    </section>
   );
 }
 
@@ -288,6 +328,7 @@ export function GeneralSettings() {
         </SettingsSection>
       </Locked>
       {ws.isAdmin && ws.demo && <DemoDataSection demo={ws.demo} />}
+      {ws.isAdmin && !ws.demo && ws.canLoadSample && <SampleDataSection />}
       <SaveBar dirty={dirty} saving={saving} disabled={invalid} onSave={() => void save()} onDiscard={() => { reset(); setTouched(false); }} />
     </>
   );

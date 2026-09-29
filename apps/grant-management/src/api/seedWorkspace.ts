@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createEndpoint } from 'zitejs/backend';
+import { createEndpoint, ZiteError } from 'zitejs/backend';
 import { zite } from 'zitejs/db';
 import { starterApplicationForm } from '@project/shared/forms/catalog';
 import type { Answers, FileValue, FormField } from '@project/shared/forms/types';
@@ -8,22 +8,29 @@ import { defaultCriteria, totalScore, type RubricCriterion } from '@project/shar
 import type { ActivityInput } from '@project/shared/server/activity';
 import { logActivity } from '@project/shared/server/activity';
 import { buildMergeContext } from '@project/shared/server/email';
-import { assertManager, colorFor, getActor } from '@project/shared/server/members';
-import { getSettings } from '@project/shared/server/settings';
+import { assertAdmin, colorFor, getActor } from '@project/shared/server/members';
+import { DEFAULTS, getSettings, type OrgSettings } from '@project/shared/server/settings';
 import { chunked } from '@project/shared/server/sql';
 import { APPLICANTS, ARTS, DEMO_ORG, LABELS, MEMBERS, NRF, RESIDENCY, SAMPLE_PDF, SCHOLARSHIP, TEMPLATES, img, type ArtsSeed } from '../seed/content';
 import {
   AGREEMENT_FORM, ARTS_FORM, ARTS_RUBRIC, INTERVIEW_RUBRIC, NRF_FORM, NRF_RUBRIC, REFLECTION_FORM, REPORT_FORM,
   RESIDENCY_FORM, RESIDENCY_RUBRIC, SCHOLARSHIP_FORM, SCHOLARSHIP_RUBRIC,
 } from '../seed/forms';
+import { sampleStatus } from '../server/demo';
 
 /**
- * Build the demo organization the first time the staff app opens.
+ * Load the sample organization into an empty workspace. An admin runs it from
+ * Settings → General; nothing calls it on its own.
  *
- * Idempotent: returns early once Settings are marked seeded or any program
- * exists. Whoever triggers it becomes "me" — owner of the open arts program,
- * a panel reviewer with work due, and the recipient of a live inbox — because
- * a template that opens on empty queues reads as broken.
+ * It refuses when the sample is already loaded or the workspace has real
+ * content (see `sampleStatus`), so a second call never builds a second copy.
+ * Whoever runs it becomes "me": owner of the open arts program, a panel
+ * reviewer with work due, and the recipient of a live inbox, so the sample
+ * shows every queue with something in it.
+ *
+ * The default email templates already exist (they are installed with the
+ * Settings row) and are reused here. Organization details are only filled in
+ * where they still hold their defaults.
  *
  * Every timestamp is an offset from now, so a template installed months from
  * today still has a deadline coming up and reviews due this week.
@@ -43,17 +50,17 @@ function prng(seed: number) {
 }
 
 export default createEndpoint({
-  description: 'Create the demo organization on first open',
+  description: 'Load the sample organization into an empty workspace',
   authenticated: true,
   inputSchema: z.object({}),
-  outputSchema: z.object({ created: z.boolean(), submissions: z.number() }),
+  outputSchema: z.object({ programs: z.number(), submissions: z.number() }),
   execute: async ({ context }) => {
     const actor = await getActor(context);
-    assertManager(actor);
+    assertAdmin(actor);
     const settings = await getSettings();
-    const { rows: existing } = await zite.sql({ query: `SELECT COUNT(*) AS n FROM "Programs"`, params: [] });
-    if (settings.seededAt || Number(existing[0]?.n ?? 0) > 0) return { created: false, submissions: 0 };
-    // Claim the seed before doing any work, so a second tab doesn't build a second copy.
+    const status = await sampleStatus(settings);
+    if (!status.canLoad) throw new ZiteError(status.reason ?? 'Sample data can’t be loaded right now', 'CONFLICT');
+    // Claim the seed before doing any work, so a second tab is refused while this one runs.
     await zite.settings.update({ id: settings.id, record: { seededAt: new Date().toISOString() } });
 
     const now = Date.now();
@@ -70,9 +77,18 @@ export default createEndpoint({
     const photo = (id: string, name: string): FileValue => ({ url: img(id), name, size: 240000 + Math.floor(rand() * 900000), type: 'image/jpeg' });
 
     // ── Organization ────────────────────────────────────────────────────────
-    const org = DEMO_ORG;
-    await zite.settings.update({ id: settings.id, record: { ...org, currency: 'USD', brandColor: '#1e5c48', defaultRole: 'Manager' } });
-    const orgSettings = { ...settings, ...org };
+    // Only details nobody has set yet take the demo's; removing the sample puts those back.
+    const unset: Record<keyof typeof DEMO_ORG, boolean> = {
+      organizationName: settings.organizationName === DEFAULTS.organizationName,
+      supportEmail: !settings.supportEmail,
+      websiteUrl: !settings.websiteUrl,
+      portalHeadline: settings.portalHeadline === DEFAULTS.portalHeadline,
+      portalIntro: settings.portalIntro === DEFAULTS.portalIntro,
+      emailSignature: !settings.emailSignature.trim(),
+    };
+    const org = Object.fromEntries(Object.entries(DEMO_ORG).filter(([k]) => unset[k as keyof typeof DEMO_ORG])) as Partial<typeof DEMO_ORG>;
+    if (Object.keys(org).length) await zite.settings.update({ id: settings.id, record: org });
+    const orgSettings: OrgSettings = { ...settings, ...org };
 
     // ── People ──────────────────────────────────────────────────────────────
     const createdMembers = await zite.members.bulkCreate({
@@ -241,13 +257,28 @@ export default createEndpoint({
       records: pool.map(([pk, mk, role]) => ({ name: `${pk} · ${nameOf[mk]}`, programId: P[pk], memberId: M[mk], role })),
     });
 
-    const createdLabels = await zite.labels.bulkCreate({ records: LABELS.map(l => ({ name: l.key, color: l.color, programId: null, description: l.description })) });
-    const LBL: Record<string, string> = Object.fromEntries(LABELS.map((l, i) => [l.key, createdLabels.records[i].id]));
+    // Organization-wide labels outlive a removal, so loading the sample again reuses them by name.
+    const { rows: existingLabels } = await zite.sql({ query: `SELECT id::text AS id, "name" FROM "Labels" WHERE COALESCE("programId", '') = '' ORDER BY created_at DESC`, params: [] });
+    const labelId = new Map(existingLabels.map(r => [String(r.name).toLowerCase(), String(r.id)] as const));
+    const newLabels = LABELS.filter(l => !labelId.has(l.key.toLowerCase()));
+    if (newLabels.length) {
+      const created = await zite.labels.bulkCreate({ records: newLabels.map(l => ({ name: l.key, color: l.color, programId: null, description: l.description })) });
+      newLabels.forEach((l, i) => labelId.set(l.key.toLowerCase(), created.records[i].id));
+    }
+    const LBL: Record<string, string> = Object.fromEntries(LABELS.map(l => [l.key, labelId.get(l.key.toLowerCase())!]));
 
+    // The default templates are the workspace's own; the sample links its messages to them where they still exist.
+    const { rows: templateRows } = await zite.sql({ query: `SELECT id::text AS id, "name", "trigger" FROM "EmailTemplates" WHERE COALESCE("programId", '') = '' ORDER BY COALESCE("position", 0) ASC, created_at ASC`, params: [] });
+    const T: Record<string, string | null> = {};
+    for (const t of TEMPLATES.filter(t => !t.program)) {
+      const match = templateRows.find(r => r.name === t.name) ?? (t.trigger !== 'Manual' ? templateRows.find(r => r.trigger === t.trigger) : undefined);
+      T[t.name] = match ? String(match.id) : null;
+    }
+    const programTemplates = TEMPLATES.filter(t => t.program);
     const createdTemplates = await zite.emailTemplates.bulkCreate({
-      records: TEMPLATES.map((t, i) => ({ name: t.name, subject: t.subject, body: t.body, trigger: t.trigger, programId: t.program ? P[t.program] : null, enabled: t.enabled, position: i })),
+      records: programTemplates.map((t, i) => ({ name: t.name, subject: t.subject, body: t.body, trigger: t.trigger, programId: P[t.program!], enabled: t.enabled, position: templateRows.length + i })),
     });
-    const T: Record<string, string> = Object.fromEntries(TEMPLATES.map((t, i) => [t.name, createdTemplates.records[i].id]));
+    programTemplates.forEach((t, i) => (T[t.name] = createdTemplates.records[i].id));
     const templateBy = (name: string) => TEMPLATES.find(t => t.name === name)!;
 
     // ── Submissions ─────────────────────────────────────────────────────────
@@ -825,6 +856,6 @@ export default createEndpoint({
       ],
     });
 
-    return { created: true, submissions: plans.length };
+    return { programs: programDefs.length, submissions: plans.length };
   },
 });

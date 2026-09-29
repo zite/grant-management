@@ -1,12 +1,10 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { seedWorkspace } from 'zitejs/api';
 import { Toaster } from '@project/components/ui/sonner';
 import { TooltipProvider } from '@project/components/ui/tooltip';
 import { AppShell } from './components/shell/AppShell';
 import { errorMessage } from './lib/errors';
-import { qk, useBootstrap } from './lib/queries';
+import { useBootstrap } from './lib/queries';
 import { useTheme } from './lib/theme';
 import { useWorkspace, WorkspaceProvider } from './lib/workspace';
 import { InboxPage } from './pages/InboxPage';
@@ -52,7 +50,7 @@ function usePrefetchPages() {
 
 const Page = ({ children }: { children: ReactNode }) => <Suspense fallback={<div className="min-h-0 flex-1" />}>{children}</Suspense>;
 
-function BootScreen({ state, onRetry, message }: { state: 'loading' | 'seeding' | 'error'; onRetry: () => void; message?: string }) {
+function BootScreen({ state, onRetry, message }: { state: 'loading' | 'error'; onRetry: () => void; message?: string }) {
   return (
     <div className="grid h-[100dvh] place-items-center bg-canvas px-6">
       <div className="flex max-w-sm flex-col items-center text-center animate-fade-up">
@@ -65,11 +63,8 @@ function BootScreen({ state, onRetry, message }: { state: 'loading' | 'seeding' 
           </>
         ) : (
           <>
-            <h1 className="text-[14px] font-medium">{state === 'seeding' ? 'Setting up your workspace' : 'Loading Grant Management'}</h1>
-            <p className="mt-1 h-10 text-[13px] text-muted-foreground">
-              {state === 'seeding' ? 'Creating a demo foundation with programs, applications, reviews and awards. This takes a few seconds, once.' : ''}
-            </p>
-            <div className="mt-2 h-1 w-40 overflow-hidden rounded-full bg-muted">
+            <h1 className="text-[14px] font-medium">Loading Grant Management</h1>
+            <div className="mt-4 h-1 w-40 overflow-hidden rounded-full bg-muted">
               <div className="h-full w-1/3 rounded-full bg-primary/70" style={{ animation: 'boot-slide 1.2s ease-in-out infinite' }} />
             </div>
             <style>{'@keyframes boot-slide{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}'}</style>
@@ -86,29 +81,14 @@ function ManagerOnly({ children }: { children: ReactNode }) {
 }
 
 function Boot() {
-  const qc = useQueryClient();
   const { data, isError, error, refetch } = useBootstrap();
-  const [seeding, setSeeding] = useState(false);
-  const [seedFailed, setSeedFailed] = useState(false);
-  const started = useRef(false);
   usePrefetchPages();
 
-  // A fresh install builds its demo organization once, on first open — but only for a manager.
-  useEffect(() => {
-    if (!data || data.seeded || started.current || data.me.role === 'Reviewer') return;
-    started.current = true;
-    setSeeding(true);
-    seedWorkspace({})
-      .then(() => qc.invalidateQueries({ queryKey: qk.bootstrap }))
-      .catch(() => setSeedFailed(true))
-      .finally(() => setSeeding(false));
-  }, [data, qc]);
-
-  const refusal = isError ? errorMessage(error, '') : '';
-  if (isError || seedFailed) {
-    return <BootScreen state="error" message={/deactivated/i.test(refusal) ? refusal : undefined} onRetry={() => { setSeedFailed(false); started.current = false; refetch(); }} />;
+  if (isError) {
+    const refusal = errorMessage(error, '');
+    return <BootScreen state="error" message={/deactivated/i.test(refusal) ? refusal : undefined} onRetry={() => void refetch()} />;
   }
-  if (!data || seeding || (!data.seeded && data.me.role !== 'Reviewer')) return <BootScreen state={seeding || (data && !data.seeded) ? 'seeding' : 'loading'} onRetry={refetch} />;
+  if (!data) return <BootScreen state="loading" onRetry={refetch} />;
 
   return (
     <WorkspaceProvider data={data}>

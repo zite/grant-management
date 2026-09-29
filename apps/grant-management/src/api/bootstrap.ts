@@ -9,7 +9,7 @@ import { getActor, isManager } from '@project/shared/server/members';
 import { getSettings, rememberStaffAppUrl } from '@project/shared/server/settings';
 import { bool, iso, num, numOrNull, ref, str } from '@project/shared/server/sql';
 import { isConfigured } from '../server/ai';
-import { demoCounts } from '../server/demo';
+import { demoCounts, sampleStatus } from '../server/demo';
 
 /**
  * Everything the staff app renders names from, loaded once and indexed on the
@@ -24,7 +24,6 @@ export default createEndpoint({
   authenticated: true,
   inputSchema: z.object({}),
   outputSchema: z.object({
-    seeded: z.boolean(),
     me: z.object({ id: z.string(), name: z.string(), email: z.string(), role: z.enum(['Admin', 'Manager', 'Reviewer']) }),
     settings: z.object({
       organizationName: z.string(),
@@ -64,8 +63,10 @@ export default createEndpoint({
     programMembers: z.array(z.object({ id: z.string(), programId: z.string(), memberId: z.string(), role: z.string() })),
     counts: z.object({ inboxUnread: z.number(), myReviewsOpen: z.number(), unreadMessages: z.number(), tasksToReview: z.number(), unreleasedDecisions: z.number() }),
     features: z.object({ ai: z.boolean() }),
-    /** Admins only: what's left of the demo organization, or null once it's gone. */
+    /** Admins only: what's left of the demo organization, or null when none is loaded. */
     demo: z.object({ programs: z.number(), submissions: z.number(), applicants: z.number(), members: z.number() }).nullable(),
+    /** Admins only: whether Settings → General offers to load the sample (nothing loaded, and no real content yet). */
+    canLoadSample: z.boolean(),
   }),
   execute: async ({ context }) => {
     const actor = await getActor(context);
@@ -108,8 +109,7 @@ export default createEndpoint({
               WHERE r."reviewerId" = $1 AND r."status" IN ('Assigned', 'In progress') AND s."status" = 'Submitted' AND COALESCE(s."stageId", '') = COALESCE(r."stageId", '')) AS "myReviewsOpen",
             (SELECT COUNT(*) FROM "Messages" m WHERE m."direction" = 'Inbound' AND m."readAt" IS NULL) AS "unreadMessages",
             (SELECT COUNT(*) FROM "Tasks" t WHERE t."status" = 'Submitted') AS "tasksToReview",
-            (SELECT COUNT(*) FROM "Submissions" s WHERE s."status" IN ('Accepted', 'Declined', 'Waitlisted') AND s."notifiedAt" IS NULL) AS "unreleasedDecisions",
-            (SELECT COUNT(*) FROM "Programs") AS "programTotal"`,
+            (SELECT COUNT(*) FROM "Submissions" s WHERE s."status" IN ('Accepted', 'Declined', 'Waitlisted') AND s."notifiedAt" IS NULL) AS "unreleasedDecisions"`,
         params: [actor.id],
       }),
     ]);
@@ -167,8 +167,10 @@ export default createEndpoint({
       for (const p of programs) if (p.ownerId) colleagueIds.add(p.ownerId);
     }
 
+    const demo = actor.role === 'Admin' ? await demoCounts(settings) : null;
+    const canLoadSample = actor.role === 'Admin' && (await sampleStatus(settings, demo)).canLoad;
+
     return {
-      seeded: Boolean(settings.seededAt) || num(c.programTotal) > 0,
       me: { id: actor.id, name: actor.name, email: actor.email, role: actor.role },
       settings: {
         organizationName: settings.organizationName,
@@ -274,7 +276,8 @@ export default createEndpoint({
         unreleasedDecisions: manager ? num(c.unreleasedDecisions) : 0,
       },
       features: { ai: isConfigured() },
-      demo: actor.role === 'Admin' ? await demoCounts(settings) : null,
+      demo,
+      canLoadSample,
     };
   },
 });

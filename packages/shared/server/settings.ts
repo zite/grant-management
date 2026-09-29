@@ -1,8 +1,10 @@
 import { zite } from 'zitejs/db';
 import { iso, str } from './sql';
+import { installDefaultTemplates } from './templates';
 
 /**
- * The organization's settings: one row, created on first read.
+ * The organization's settings: one row, created on first read along with the
+ * default email templates.
  *
  * Both apps read it — the portal for branding, the staff app for email
  * signatures and currency — so it lives here rather than in either app.
@@ -81,6 +83,10 @@ export async function getSettings(): Promise<OrgSettings> {
       staffAppUrl: null,
     },
   });
+  // A brand-new workspace also gets its default email templates. Two first
+  // requests can both create a row; only the one that made the oldest installs them.
+  const { rows: first } = await zite.sql({ query: `SELECT id::text AS id FROM "Settings" ORDER BY created_at ASC, id ASC LIMIT 1`, params: [] });
+  if (String(first[0]?.id ?? '') === String(created.id)) await installDefaultTemplates();
   return toSettings(created as unknown as Record<string, unknown>);
 }
 

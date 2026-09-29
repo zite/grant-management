@@ -43,9 +43,9 @@ Two apps share one database:
 | **Grant Management** | `apps/grant-management` | Staff and reviewers: build programs and forms, triage and review submissions, decide, pay awards, report | Internal (organization members) |
 | **Applicant Portal** | `apps/applicant-portal` | Applicants: find programs, check eligibility, apply, track status, answer follow-ups. Volunteer reviewers: score assigned applications | External (public, with sign-in) |
 
-It opens on a populated demo: Riverbend Community Foundation, with five programs
-and 68 submissions across every stage, so every screen has something in it the
-first time you look. Settings has a one-click way to delete all of it.
+A new workspace starts empty. To look around first, an admin can load a sample
+foundation from Settings → General: Riverbend Community Foundation, with five
+programs and 68 submissions across every stage. The same page removes it again.
 
 <p align="center">
   <img alt="The submissions list, grouped by program, with reviewer progress and scores" src=".github/assets/submissions.png">
@@ -103,7 +103,7 @@ first time you look. Settings has a one-click way to delete all of it.
 - **Settings.** Organization name, logo, currency and email signature; the applicant portal
   (headline, intro, brand colour, privacy policy); members and roles (Admin, Manager,
   Reviewer); labels; email templates with merge tags, per-program overrides, live preview
-  and test sends; and removing the demo data.
+  and test sends; and loading or removing the sample data.
 - **Daily reminders.** A scheduled job (14:00 UTC) nudges applicants about unsubmitted
   drafts before a deadline, reviewers about due reviews, recipients about follow-ups, and
   managers about closed programs and due payments. Each nudge is sent once; admins can
@@ -161,9 +161,11 @@ claude mcp add --transport http zite https://mcp.zite.com/mcp
 >    resolves.
 > 6. `check_app` both apps, `commit`, then `publish_app` both.
 
-**3. Open the staff app.** It seeds the demo on first load. When you are ready for
-real data, go to **Settings → General → Remove demo data**, which deletes everything
-the seed created and keeps anything you have added since.
+**3. Open the staff app.** The first person to open it becomes its admin. It starts
+empty, with the default email templates in place. To try it with data first, go to
+**Settings → General → Load sample data** (offered until the workspace has a program
+of its own). **Remove demo data** on the same page deletes everything the sample
+created and keeps anything you added before or since.
 
 <details>
 <summary>Setting it up for your own organization</summary>
