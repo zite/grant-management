@@ -1,5 +1,6 @@
 import { ZiteError } from 'zitejs/backend';
 import { zite } from 'zitejs/db';
+import { isDemo } from './demoPreview';
 import { getSettings } from './settings';
 
 /**
@@ -64,6 +65,19 @@ export async function findMemberByEmail(email: string) {
 
 const SEEN_EVERY_MS = 10 * 60 * 1000;
 
+const NIL_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Who the demo visitor acts as: the oldest active admin, so their inbox and reviews show the sample data. Never written. */
+async function demoActor(context: { user?: UserLike }, email: string): Promise<Actor> {
+  const { rows } = await zite.sql({
+    query: `SELECT id, "name", "email", "role" FROM "Members" WHERE "status" = 'Active' ORDER BY CASE WHEN "role" = 'Admin' THEN 0 ELSE 1 END, created_at ASC, id ASC LIMIT 1`,
+    params: [],
+  });
+  const m = rows[0];
+  if (m) return { id: String(m.id), name: String(m.name || nameFromEmail(String(m.email))), email: String(m.email), role: asRole(m.role), created: false };
+  return { id: NIL_ID, name: context.user?.firstName || 'Demo User', email, role: 'Admin', created: false };
+}
+
 /** The signed-in staff member. Creates a member the first time someone new opens the app. */
 export async function getActor(context: { user?: UserLike }): Promise<Actor> {
   const email = context.user?.email?.trim().toLowerCase();
@@ -83,9 +97,11 @@ export async function getActor(context: { user?: UserLike }): Promise<Actor> {
     if (row.status === 'Invited') patch.status = 'Active';
     const seen = row.lastSeenAt ? Date.parse(String(row.lastSeenAt)) : 0;
     if (Date.now() - seen > SEEN_EVERY_MS) patch.lastSeenAt = new Date().toISOString();
-    if (Object.keys(patch).length) await zite.members.update({ id: String(row.id), record: patch as never });
+    // The demo's database is read-only and refuses the whole request on any write.
+    if (Object.keys(patch).length && !isDemo(context)) await zite.members.update({ id: String(row.id), record: patch as never });
     return { id: String(row.id), name: String(row.name || nameFromEmail(email)), email, role: asRole(row.role), created: false };
   }
+  if (isDemo(context)) return demoActor(context, email);
 
   const { name, image } = await profileName(context, email);
   // The first person in runs the place; everyone after gets the organization's default role.
@@ -118,7 +134,7 @@ export async function getPortalReviewer(context: { user?: UserLike }): Promise<A
   if (!email) return null;
   const m = await findMemberByEmail(email);
   if (!m || m.status === 'Deactivated') return null;
-  if (m.status === 'Invited') await zite.members.update({ id: String(m.id), record: { status: 'Active' } });
+  if (m.status === 'Invited' && !isDemo(context)) await zite.members.update({ id: String(m.id), record: { status: 'Active' } });
   return { id: String(m.id), name: String(m.name || nameFromEmail(email)), email, role: asRole(m.role), created: false };
 }
 

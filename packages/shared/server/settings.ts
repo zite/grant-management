@@ -1,4 +1,5 @@
 import { zite } from 'zitejs/db';
+import { isDemo } from './demoPreview';
 import { iso, str } from './sql';
 import { installDefaultTemplates } from './templates';
 
@@ -65,24 +66,25 @@ function toSettings(r: Record<string, unknown>): OrgSettings {
 export async function getSettings(): Promise<OrgSettings> {
   const { rows } = await zite.sql({ query: `SELECT * FROM "Settings" ORDER BY created_at ASC LIMIT 1`, params: [] });
   if (rows[0]) return toSettings(rows[0]);
-  const created = await zite.settings.create({
-    record: {
-      organizationName: DEFAULTS.organizationName,
-      logoUrl: null,
-      websiteUrl: null,
-      supportEmail: null,
-      brandColor: DEFAULTS.brandColor,
-      currency: DEFAULTS.currency,
-      portalHeadline: DEFAULTS.portalHeadline,
-      portalIntro: DEFAULTS.portalIntro,
-      emailSignature: null,
-      privacyUrl: null,
-      defaultRole: DEFAULTS.defaultRole,
-      seededAt: null,
-      portalUrl: null,
-      staffAppUrl: null,
-    },
-  });
+  const record = {
+    organizationName: DEFAULTS.organizationName,
+    logoUrl: null,
+    websiteUrl: null,
+    supportEmail: null,
+    brandColor: DEFAULTS.brandColor,
+    currency: DEFAULTS.currency,
+    portalHeadline: DEFAULTS.portalHeadline,
+    portalIntro: DEFAULTS.portalIntro,
+    emailSignature: null,
+    privacyUrl: null,
+    defaultRole: DEFAULTS.defaultRole,
+    seededAt: null,
+    portalUrl: null,
+    staffAppUrl: null,
+  };
+  // The demo's database is read-only and refuses the whole request on any write.
+  if (isDemo()) return toSettings({ id: '00000000-0000-0000-0000-000000000000', ...record });
+  const created = await zite.settings.create({ record });
   // A brand-new workspace also gets its default email templates. Two first
   // requests can both create a row; only the one that made the oldest installs them.
   const { rows: first } = await zite.sql({ query: `SELECT id::text AS id FROM "Settings" ORDER BY created_at ASC, id ASC LIMIT 1`, params: [] });
@@ -96,6 +98,7 @@ export async function getSettings(): Promise<OrgSettings> {
  * anyone configuring it.
  */
 export async function rememberPortalUrl(settings: OrgSettings) {
+  if (isDemo()) return settings;
   const url = (process.env.ZITE_APP_URL ?? '').replace(/\/+$/, '');
   if (!url || !/^https:\/\//.test(url) || url === settings.portalUrl) return settings;
   // Editor previews run on preview hosts; only the live URL is worth keeping.
@@ -106,6 +109,7 @@ export async function rememberPortalUrl(settings: OrgSettings) {
 
 /** The staff app does the same, so reviewer emails can link managers back to it. */
 export async function rememberStaffAppUrl(settings: OrgSettings) {
+  if (isDemo()) return settings;
   const url = (process.env.ZITE_APP_URL ?? '').replace(/\/+$/, '');
   if (!url || !/^https:\/\//.test(url) || url === settings.staffAppUrl) return settings;
   if (/sandbox|preview|editor|localhost/i.test(url) && settings.staffAppUrl) return settings;

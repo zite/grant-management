@@ -3,6 +3,7 @@ import { createEndpoint } from 'zitejs/backend';
 import { zite } from 'zitejs/db';
 import { parseAnswers, parseFields } from '@project/shared/forms/logic';
 import { getApplicant } from '@project/shared/server/applicants';
+import { isDemo } from '@project/shared/server/demoPreview';
 import { applicationForm } from '@project/shared/server/pipeline';
 import { getSettings } from '@project/shared/server/settings';
 import { day, iso, ref, str } from '@project/shared/server/sql';
@@ -50,7 +51,7 @@ export default createEndpoint({
     // Opening the application is reading the thread.
     const unreadIds = messageRows.filter(m => m.direction === 'Outbound' && !m.readAt).map(m => String(m.id));
     const now = new Date().toISOString();
-    for (const messageId of unreadIds) {
+    for (const messageId of isDemo(context) ? [] : unreadIds) {
       await zite.messages.update({ id: messageId, record: { readAt: now } });
     }
 

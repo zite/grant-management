@@ -27,7 +27,7 @@ export const qk = {
 };
 
 export function useBootstrap() {
-  return useQuery({ queryKey: qk.bootstrap, queryFn: () => bootstrap({}), staleTime: 60_000, refetchOnWindowFocus: true });
+  return useQuery({ queryKey: qk.bootstrap, queryFn: () => bootstrap({}), staleTime: 60_000, refetchOnWindowFocus: true, retry: retryUnlessRefused });
 }
 
 export function useSubmissions(filters: SubmissionFilters, ordering: Ordering = 'submitted_desc', opts: { enabled?: boolean; includeAnswers?: boolean } = {}) {
@@ -42,6 +42,9 @@ export function useSubmissions(filters: SubmissionFilters, ordering: Ordering = 
 
 /** A missing record won't appear on retry; everything else (network, 5xx) gets a couple more tries. */
 export const retryUnlessNotFound = (count: number, error: unknown) => !/not found|\(404\)/i.test(String((error as Error)?.message ?? '')) && count < 2;
+
+/** A refusal (signed out, deactivated, the read-only demo) won't change on retry; show it instead of spinning. */
+const retryUnlessRefused = (count: number, error: unknown) => !/\(4\d\d\)|FORBIDDEN|UNAUTHORIZED|DEMO_READ_ONLY/.test(String((error as Error)?.message ?? '')) && count < 2;
 
 export const isReference = (s: string) => /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(s);
 

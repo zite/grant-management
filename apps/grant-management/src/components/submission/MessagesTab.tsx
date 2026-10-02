@@ -44,6 +44,8 @@ export function MessagesTab({ detail }: { detail: SubmissionDetail }) {
 
   useEffect(() => {
     if (marked.current === submission.id) return;
+    // The read-only demo refuses the write and toasts the moment the tab opens.
+    if ((window as { __ziteDemo?: unknown }).__ziteDemo) return;
     if (!messages.some(m => m.direction === 'Inbound' && !m.readAt) && submission.unreadMessages === 0) return;
     marked.current = submission.id;
     const now = new Date().toISOString();

@@ -1,5 +1,6 @@
 import { ZiteError } from 'zitejs/backend';
 import { zite } from 'zitejs/db';
+import { isDemo } from './demoPreview';
 import { iso, str } from './sql';
 import { nameFromEmail } from './members';
 
@@ -45,6 +46,17 @@ export async function findApplicantByEmail(email: string) {
 
 const ACTIVE_EVERY_MS = 15 * 60 * 1000;
 
+/** Who the demo visitor sees the portal as: the oldest applicant with an application, or nobody in an empty workspace. Never written. */
+async function demoApplicant(context: { user?: UserLike }, email: string): Promise<ApplicantRow & { created: boolean }> {
+  const { rows } = await zite.sql({
+    query: `SELECT a.* FROM "Applicants" a WHERE EXISTS (SELECT 1 FROM "Submissions" s WHERE s."applicantId" = a.id::text) ORDER BY a.created_at ASC, a.id ASC LIMIT 1`,
+    params: [],
+  });
+  if (rows[0]) return { ...toApplicant(rows[0]), created: false };
+  const name = [context.user?.firstName, context.user?.lastName].filter(Boolean).join(' ').trim() || 'Demo User';
+  return { ...toApplicant({ id: '00000000-0000-0000-0000-000000000000', name, email }), created: false };
+}
+
 /** The signed-in applicant, created on first sight. */
 export async function getApplicant(context: { user?: UserLike }): Promise<ApplicantRow & { created: boolean }> {
   const email = context.user?.email?.trim().toLowerCase();
@@ -56,11 +68,13 @@ export async function getApplicant(context: { user?: UserLike }): Promise<Applic
   if (rows[0]) {
     const a = toApplicant(rows[0]);
     const last = rows[0].lastActiveAt ? Date.parse(String(rows[0].lastActiveAt)) : 0;
-    if (Date.now() - last > ACTIVE_EVERY_MS) {
+    // The demo's database is read-only and refuses the whole request on any write.
+    if (Date.now() - last > ACTIVE_EVERY_MS && !isDemo(context)) {
       await zite.applicants.update({ id: a.id, record: { lastActiveAt: new Date().toISOString() } });
     }
     return { ...a, created: false };
   }
+  if (isDemo(context)) return demoApplicant(context, email);
   const name = [context.user?.firstName, context.user?.lastName].filter(Boolean).join(' ').trim() || nameFromEmail(email);
   const now = new Date().toISOString();
   const created = await zite.applicants.create({
